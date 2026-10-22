@@ -1,6 +1,7 @@
 //! Icon loading: the bundled SVGs, freedesktop theme lookups and the raw
 //! ARGB pixmaps that StatusNotifierItems send over D-Bus.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,8 @@ use system_tray::item::IconPixmap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
-    Battery,
+    /// Upright battery filled to the given percentage.
+    Battery(u8),
     Bluetooth,
     Brightness,
     Ethernet,
@@ -22,17 +24,33 @@ pub enum Builtin {
 }
 
 impl Builtin {
-    fn svg(self) -> &'static [u8] {
-        match self {
-            Builtin::Battery => include_bytes!("../assets/icons/battery.svg"),
+    fn svg(self) -> Cow<'static, [u8]> {
+        let data: &[u8] = match self {
+            Builtin::Battery(level) => return Cow::Owned(battery_svg(level).into_bytes()),
             Builtin::Bluetooth => include_bytes!("../assets/icons/bluetooth.svg"),
             Builtin::Brightness => include_bytes!("../assets/icons/brightness.svg"),
             Builtin::Ethernet => include_bytes!("../assets/icons/ethernet.svg"),
             Builtin::Mic => include_bytes!("../assets/icons/mic.svg"),
             Builtin::Volume => include_bytes!("../assets/icons/volume.svg"),
             Builtin::Wifi => include_bytes!("../assets/icons/wifi.svg"),
-        }
+        };
+        Cow::Borrowed(data)
     }
+}
+
+/// An upright battery in the same style as the other icons, its inside
+/// filled from the bottom to `level` percent.
+fn battery_svg(level: u8) -> String {
+    // The inside spans y=4..13, leaving a 0.75 gap inside the outline.
+    let height = 9.0 * level.min(100) as f32 / 100.0;
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.5">
+  <rect x="4.5" y="2.5" width="7" height="12" rx="1.5"/>
+  <rect x="6.5" y="0.5" width="3" height="1.5" fill="#ffffff" stroke="none"/>
+  <rect x="6" y="{y}" width="4" height="{height}" fill="#ffffff" stroke="none"/>
+</svg>"##,
+        y = 13.0 - height,
+    )
 }
 
 /// Where an icon comes from; resolved lazily at whatever size is drawn.
@@ -105,7 +123,7 @@ impl IconCache {
 
 fn load(source: &IconSource, size: u32) -> Option<Pixmap> {
     let pixmap = match source {
-        IconSource::Builtin(b) => render_svg(b.svg(), size),
+        IconSource::Builtin(b) => render_svg(&b.svg(), size),
         IconSource::Named { name, theme_path } => {
             find_icon(name, theme_path.as_deref(), size).and_then(|path| load_file(&path, size))
         }
@@ -208,4 +226,31 @@ fn fit(pixmap: Pixmap, size: u32) -> Pixmap {
     let paint = PixmapPaint { quality: resvg::tiny_skia::FilterQuality::Bicubic, ..Default::default() };
     out.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::from_row(scale, 0.0, 0.0, scale, dx, dy), None);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fraction of the battery's inside (x=6..10, y=4..13) that's opaque.
+    fn filled(level: u8) -> f32 {
+        let px = render_svg(&Builtin::Battery(level).svg(), 160).unwrap();
+        let (mut on, mut total) = (0, 0);
+        for y in 41..129 {
+            for x in 61..99 {
+                total += 1;
+                on += (px.pixel(x, y).unwrap().alpha() > 128) as u32;
+            }
+        }
+        on as f32 / total as f32
+    }
+
+    #[test]
+    fn battery_fills_with_level() {
+        assert!(filled(0) < 0.02);
+        assert!((filled(50) - 0.5).abs() < 0.05);
+        assert!(filled(100) > 0.98);
+        // Out-of-range values clamp instead of overflowing the outline.
+        assert_eq!(battery_svg(255), battery_svg(100));
+    }
 }

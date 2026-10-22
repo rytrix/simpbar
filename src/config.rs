@@ -104,12 +104,13 @@ pub fn modules() -> Vec<Module> {
             ..Module::DEFAULT
         },
         Module {
-            icon: Builtin::Battery,
+            icon: Builtin::Battery(0),
             // Whichever battery exists (BAT0, BAT1, ...); the first if there are several.
             command: &["sh", "-c", "cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -n1"],
             interval: Duration::from_secs(30),
             format: |r| ModuleState {
                 text: if r.is_empty() { String::new() } else { format!("{r}%") },
+                icon: r.parse::<u8>().ok().map(Builtin::Battery),
                 ..Default::default()
             },
             ..Module::DEFAULT

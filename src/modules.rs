@@ -45,7 +45,7 @@ pub struct Module {
 
 impl Module {
     pub const DEFAULT: Module = Module {
-        icon: Builtin::Battery,
+        icon: Builtin::Battery(100),
         command: &[],
         interval: Duration::from_secs(2),
         hide_when_empty: true,
