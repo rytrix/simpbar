@@ -1,7 +1,7 @@
 # simpbar
 
 A minimal Wayland status bar for [niri](https://github.com/YaLTeR/niri), ported
-from the Quickshell config in `quickshell/bar`.
+from my Quickshell config 
 
 - Workspaces for the bar's output (click to focus)
 - Clock (click opens `gnome-calendar`)
@@ -12,8 +12,9 @@ from the Quickshell config in `quickshell/bar`.
 
 ```sh
 cargo build --release
-./target/release/simpbar
 ```
+
+Icons and the font are compiled in, so the binary runs from anywhere on its own.
 
 Runtime tools used by the default modules: `nmcli`, `bluetoothctl`,
 `dbus-monitor`, `wpctl`, `pactl`, `brightnessctl`, `pavucontrol`,
