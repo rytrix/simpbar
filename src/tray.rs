@@ -69,7 +69,10 @@ pub fn spawn(tx: Sender<Msg>) -> UnboundedSender<Request> {
                 tokio::select! {
                     event = events.recv() => {
                         match event {
-                            Ok(Event::Add(address, _)) => {
+                            Ok(Event::Add(address, item)) => {
+                                if icons(&item).is_empty() {
+                                    log::warn!("tray item {address} ({:?}) has no icon yet", item.id);
+                                }
                                 if !order.contains(&address) {
                                     order.push(address);
                                 }

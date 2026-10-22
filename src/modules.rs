@@ -92,23 +92,10 @@ impl Runner {
 
         if !module.watch.is_empty() {
             let t = trigger.clone();
-            let watch = module.watch;
+            let cmd = module.watch;
             thread::spawn(move || {
-                loop {
-                    if let Ok(mut child) = command(watch).stdout(Stdio::piped()).spawn() {
-                        let group = Group::track(child.id());
-                        if let Some(out) = child.stdout.take() {
-                            for _ in BufReader::new(out).lines().map_while(Result::ok) {
-                                if t.send(()).is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        // Takes the rest of a pipeline down with the shell.
-                        group.signal(libc::SIGTERM);
-                        let _ = child.wait();
-                    }
-                    thread::sleep(Duration::from_secs(2));
+                if watch(cmd, &t, Duration::from_secs(2), WATCH_GIVE_UP) {
+                    log::warn!("{cmd:?} keeps exiting; giving up on it, polling every {interval:?} instead");
                 }
             });
         }
@@ -129,6 +116,43 @@ impl Runner {
             busy.store(false, Ordering::Release);
             let _ = trigger.send(());
         });
+    }
+}
+
+/// A watch that exits sooner than this after starting counts as failing.
+const WATCH_MIN_UPTIME: Duration = Duration::from_secs(10);
+/// How long a watch may keep failing before it's abandoned.
+const WATCH_GIVE_UP: Duration = Duration::from_secs(60);
+
+/// Runs `cmd`, sending a trigger per line it prints, and restarts it `retry`
+/// after it exits. Returns true once it has kept failing (not starting, or
+/// exiting within `WATCH_MIN_UPTIME`) for `give_up`; false if nothing is
+/// listening for triggers any more.
+fn watch(cmd: Cmd, trigger: &mpsc::Sender<()>, retry: Duration, give_up: Duration) -> bool {
+    let mut failing_since: Option<Instant> = None;
+    loop {
+        let started = Instant::now();
+        if let Ok(mut child) = command(cmd).stdout(Stdio::piped()).spawn() {
+            let group = Group::track(child.id());
+            if let Some(out) = child.stdout.take() {
+                for _ in BufReader::new(out).lines().map_while(Result::ok) {
+                    if trigger.send(()).is_err() {
+                        return false;
+                    }
+                }
+            }
+            // Takes the rest of a pipeline down with the shell.
+            group.signal(libc::SIGTERM);
+            let _ = child.wait();
+        }
+        // Something that ran a while is worth restarting indefinitely (e.g.
+        // `pactl subscribe` across a PipeWire restart); a missing tool isn't.
+        if started.elapsed() >= WATCH_MIN_UPTIME {
+            failing_since = None;
+        } else if failing_since.get_or_insert(started).elapsed() >= give_up {
+            return true;
+        }
+        thread::sleep(retry);
     }
 }
 
@@ -285,6 +309,17 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         let alive = Command::new("pgrep").args(["-fx", "sleep 31.4159"]).output().unwrap();
         assert!(alive.stdout.is_empty(), "pipeline member survived the timeout");
+    }
+
+    #[test]
+    fn watch_gives_up_on_a_command_that_keeps_failing() {
+        let (tx, rx) = mpsc::channel();
+        let start = Instant::now();
+        assert!(watch(&["sh", "-c", "echo line; exit 1"], &tx, Duration::from_millis(10), Duration::from_millis(200)));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        // Lines printed before each exit still triggered refreshes.
+        assert!(rx.try_iter().count() >= 2);
+        assert!(watch(&["/nonexistent"], &tx, Duration::from_millis(10), Duration::from_millis(100)));
     }
 
     #[test]

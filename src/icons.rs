@@ -125,9 +125,23 @@ fn load(source: &IconSource, size: u32) -> Option<Pixmap> {
     let pixmap = match source {
         IconSource::Builtin(b) => render_svg(&b.svg(), size),
         IconSource::Named { name, theme_path } => {
-            find_icon(name, theme_path.as_deref(), size).and_then(|path| load_file(&path, size))
+            let Some(path) = find_icon(name, theme_path.as_deref(), size) else {
+                log::warn!("icon {name:?} not found (extra search dir: {theme_path:?})");
+                return None;
+            };
+            let pixmap = load_file(&path, size);
+            if pixmap.is_none() {
+                log::warn!("failed to load icon {}", path.display());
+            }
+            pixmap
         }
-        IconSource::Pixmaps { data, .. } => from_argb(data, size),
+        IconSource::Pixmaps { data, .. } => {
+            let pixmap = from_argb(data, size);
+            if pixmap.is_none() {
+                log::warn!("icon pixmaps are empty or malformed: {data:?}");
+            }
+            pixmap
+        }
         IconSource::Png { data, .. } => Pixmap::decode_png(data).ok(),
     }?;
     Some(fit(pixmap, size))
@@ -169,7 +183,8 @@ fn find_icon(name: &str, theme_path: Option<&str>, size: u32) -> Option<PathBuf>
         lookup = lookup.with_theme(theme);
     }
     lookup.find().or_else(|| {
-        ["png", "svg", "xpm"]
+        // No XPM: `load_file` can't decode it.
+        ["png", "svg"]
             .iter()
             .map(|ext| PathBuf::from(format!("/usr/share/pixmaps/{name}.{ext}")))
             .find(|p| p.exists())
